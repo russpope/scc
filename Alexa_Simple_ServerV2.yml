@@ -1,0 +1,114 @@
+heat_template_version: 2013-05-23
+# Author: Graham Land
+# Date: 10/11/2016
+# Purpose: Demonstrate deployment of a Linux box with Global IP to an existing Network on K5
+
+description: >
+  HOT template to deploy a server into an existing neutron tenant network and
+  assign a floating IP addresses to the server so it is routable from the
+  public network. Fujitsu K5 OpenStack IaaS Public Cloud
+
+parameters:
+  key_name:
+    type: string
+    label: Key name
+    description: Name of keypair to assign to servers "VoiceDemo""demostack"
+    default: "VoiceDemo"
+  image:
+    type: string
+    label: Image name or ID
+    description: Image to be used for compute instance
+    default: "Ubuntu Server 14.04 LTS (English) 01"
+  flavor:
+    type: string
+    label: Flavor
+    description: Type of instance (flavor) to be used
+    default: "S-1"
+  public_net_id:
+    type: string
+    label: external network ID
+    description: Public network
+    default: "0a23d6f7-2f94-4cf3-aebb-587b29ac9538"
+  private_net_id:
+    type: string
+    label: Private network name or ID
+    description: ID of private network into which servers get deployed
+    default: "f4198c3b-0c69-4913-9a3d-20990c31d770"
+  private_subnet_id:
+    type: string
+    label: Private sub network name or ID
+    description: ID of private sub network into which servers get deployed
+    default: "33a1eb17-f860-43b5-8096-24417a1dd258"
+  az:
+    type: string
+    label: Availability Zone
+    description: Region AZ to use
+    default: "uk-1a"
+
+resources:
+  server1:
+    type: OS::Nova::Server
+    depends_on: [sys-vol]
+    properties:
+      admin_user: k5user
+      block_device_mapping: [{"volume_size": "3", "volume_id": {get_resource: sys-vol}, "delete_on_termination": True, "device_name": "/dev/vda"}]
+      name: "alexaVM"
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      key_name: { get_param: key_name }
+      networks:
+        - port: { get_resource: server1_port }
+
+  server1_port:
+    type: OS::Neutron::Port
+    properties:
+      availability_zone: { get_param: az }
+      network_id: { get_param: private_net_id }
+      fixed_ips:
+        - subnet_id: { get_param: private_subnet_id }
+      security_groups: [{ get_resource: server_security_group }]
+
+  server1_floating_ip:
+    type: OS::Neutron::FloatingIP
+    depends_on: [server1_port]
+    properties:
+      availability_zone: { get_param: az }
+      floating_network_id: { get_param: public_net_id }
+      
+  server1_floating_ip_association:
+    type: OS::Neutron::FloatingIPAssociation
+    depends_on: server1_floating_ip
+    properties:
+      floatingip_id: { get_resource: server1_floating_ip }
+      port_id: { get_resource: server1_port }
+
+  server_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      description: Add security group rules for server
+      name: security-group
+      rules:
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+          port_range_min: 22
+          port_range_max: 22
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: icmp
+
+  sys-vol:
+    type: OS::Cinder::Volume
+    depends_on: [server_security_group]
+    properties:
+      availability_zone: { get_param: az }
+      name: "boot-vol"
+      size: 3
+      volume_type: "M1"
+      image : { get_param: image }
+
+outputs:
+  server1_private_ip:
+    description: IP address of server1 in private network
+    value: { get_attr: [ server1, first_address ] }
+  server1_public_ip:
+    description: Floating IP address of server1 in public network
+    value: { get_attr: [ server1_floating_ip, floating_ip_address ] }
